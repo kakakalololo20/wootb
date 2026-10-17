@@ -7,7 +7,20 @@ START_URLS = [
 # عدّل هذا بعد ما تنسخ الرابط، مثال: "sort=newest"  (اتركه "" لو ما عرفته)
 SORT_QUERY = "selectedSort=nf"
 MAX_PAGES = 40
-KEYWORDS = ["SSD", "NVMe", "RTX", "GTX", "Radeon", "GPU", "graphics card"]
+KEYWORDS = ["SSD", "NVMe", "RTX", "GTX", "Radeon", "GPU", "graphics card",# كروت الشاشة
+    "RTX", "GTX", "Radeon", "GPU", "graphics card", "video card",
+    "Arc A", "GeForce", "RX 7", "RX 6",
+
+    # التخزين
+    "SSD", "NVMe", "M.2", "hard drive", "HDD", "NAS",
+    "Samsung 990", "Samsung 980", "WD Black", "Crucial P3",
+
+    # المعالجات واللوحات
+    "Ryzen", "Core i5", "Core i7", "Core i9", "Threadripper",
+    "CPU", "processor", "motherboard", "LGA1700", "AM5",
+
+    # الرام
+    "DDR4", "DDR5", "RAM", "SODIMM"]
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "حط_التوكن_هنا_للتجربة_المحلية")
 CHAT_ID = os.environ.get("CHAT_ID", "حط_رقمك_هنا_للتجربة_المحلية")
