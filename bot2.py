@@ -4,6 +4,8 @@ from playwright.sync_api import sync_playwright
 START_URLS = [
     "https://www.woot.com/alldeals",
 ]
+# عدّل هذا بعد ما تنسخ الرابط، مثال: "sort=newest"  (اتركه "" لو ما عرفته)
+SORT_QUERY = "selectedSort=nf"
 MAX_PAGES = 40
 KEYWORDS = ["SSD", "NVMe", "RTX", "GTX", "Radeon", "GPU", "graphics card"]
 
@@ -43,7 +45,16 @@ els => {
 }
 """
 
-def get_products():
+def build_url(base, n):
+    params = []
+    if SORT_QUERY:
+        params.append(SORT_QUERY)
+    if n > 1:
+        params.append(f"page={n}")
+    return base + ("?" + "&".join(params) if params else "")
+
+def get_products(seen):
+    """seen = None في أول تشغيل (فحص كامل). غير كذا: يوقف عند أول صفحة ما فيها جديد."""
     available = {}
     all_links = set()
     with sync_playwright() as p:
@@ -51,7 +62,7 @@ def get_products():
         page = browser.new_page()
         for base in START_URLS:
             for n in range(1, MAX_PAGES + 1):
-                url = base if n == 1 else f"{base}?page={n}"
+                url = build_url(base, n)
                 try:
                     page.goto(url, wait_until="networkidle", timeout=60000)
                     page.wait_for_selector('a[href*="/offers/"]', timeout=10000)
@@ -65,6 +76,14 @@ def get_products():
                 ok = {h: data[h]["text"] for h in new_links if not data[h]["sold"]}
                 available.update(ok)
                 print(f"{base.split('/')[-1]} صفحة {n}: متوفر {len(ok)} | منتهي {len(new_links) - len(ok)}")
+                if n == 1:
+                    print("أول المنتجات (تأكد إنها الأحدث):")
+                    for t in list(ok.values())[:3]:
+                        print("  -", t[:80])
+                # وقف مبكر: صفحة كلها قديمة = الباقي أقدم منها
+                if seen is not None and all(h in seen for h in ok):
+                    print("  لا جديد في هالصفحة، نوقف.")
+                    break
         browser.close()
     return available
 
@@ -87,7 +106,7 @@ def load_seen():
         return None
 
 seen = load_seen()
-current = get_products()
+current = get_products(seen)
 
 if not current:
     print("ما جاب أي منتج، ممكن الموقع حظر الطلب. ما حفظت شي.")
@@ -99,8 +118,11 @@ if seen is not None:
             hits = matched(name)
             if hits:
                 notify(f"🔎 {', '.join(hits)}\n{name[:200]}\n{link}")
+    merged = {**seen, **current}   # ندمج لأن الفحص ما غطى كل الصفحات
+else:
+    merged = current
 
-json.dump(current, open(DB, "w", encoding="utf-8"), ensure_ascii=False)
+json.dump(merged, open(DB, "w", encoding="utf-8"), ensure_ascii=False)
 
-print(f"\nتم فحص {len(current)} منتج متوفر")
+print(f"\nجديد/مفحوص هالمرة: {len(current)} | المحفوظ كله: {len(merged)}")
 print("أول تشغيل: تم الحفظ بدون تنبيه" if seen is None else "تمت المقارنة")
