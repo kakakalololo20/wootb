@@ -3,9 +3,11 @@ from playwright.sync_api import sync_playwright
 
 BASE_URL = "https://www.woot.com/category/computers/computer-parts-components"
 MAX_PAGES = 10
+FAIL_THRESHOLD = 3          # عدد الفشلات المتتالية قبل التنبيه
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "حط_التوكن_هنا_للتجربة_المحلية")
 CHAT_ID = os.environ.get("CHAT_ID", "حط_رقمك_هنا_للتجربة_المحلية")
 DB = "seen.json"
+STATUS = "status.json"
 
 JS = r"""
 els => {
@@ -35,7 +37,6 @@ els => {
 """
 
 def get_products():
-    """يرجع كل المنتجات (المتوفرة والمنتهية) مع حالتها."""
     products = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -59,31 +60,59 @@ def get_products():
     return products
 
 def notify(text):
-    r = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": text},
-    )
-    print("تيليجرام:", r.status_code)
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text},
+            timeout=20,
+        )
+        print("تيليجرام:", r.status_code)
+    except Exception as e:
+        print("فشل إرسال تيليجرام:", e)
 
-def load_seen():
-    if not os.path.exists(DB):
+def load_json(path):
+    if not os.path.exists(path):
         return None
     try:
-        raw = json.load(open(DB, encoding="utf-8"))
+        return json.load(open(path, encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-    # تحويل الصيغة القديمة {رابط: اسم} للصيغة الجديدة
-    return {
-        h: (v if isinstance(v, dict) else {"name": v, "available": True})
-        for h, v in raw.items()
-    }
 
-seen = load_seen()
-current = get_products()
+def save_json(path, data):
+    json.dump(data, open(path, "w", encoding="utf-8"), ensure_ascii=False)
 
+# ---------- التشغيل ----------
+raw = load_json(DB)
+seen = None if raw is None else {
+    h: (v if isinstance(v, dict) else {"name": v, "available": True})
+    for h, v in raw.items()
+}
+status = load_json(STATUS) or {"fails": 0, "alerted": False}
+
+try:
+    current = get_products()
+except Exception as e:
+    print("خطأ أثناء الجلب:", e)
+    current = {}
+
+# ---------- حالة فشل ----------
 if not current:
-    print("ما جاب أي منتج، ممكن الموقع حظر الطلب. ما حفظت شي.")
+    status["fails"] += 1
+    print(f"فشل الجلب ({status['fails']} متتالية). ما حفظت منتجات.")
+    if status["fails"] >= FAIL_THRESHOLD and not status["alerted"]:
+        notify(
+            f"⚠️ البوت متعطل: فشل {status['fails']} مرات ورا بعض.\n"
+            "غالباً الموقع حظر الطلب أو غيّر شكل الصفحة. شوف تبويب Actions في GitHub."
+        )
+        status["alerted"] = True
+    save_json(STATUS, status)
     sys.exit(1)
+
+# ---------- حالة نجاح ----------
+if status["alerted"]:
+    notify("✅ البوت رجع يشتغل طبيعي.")
+status = {"fails": 0, "alerted": False}
+save_json(STATUS, status)
 
 new_count = restock_count = 0
 if seen is not None:
@@ -98,9 +127,8 @@ if seen is not None:
             notify(f"🔄 رجع للستوك: {item['name'][:150]}\n{link}")
             restock_count += 1
 
-# ندمج مع القديم عشان لو صفحة فشلت ما نخسر حالة منتجاتها
 merged = {**(seen or {}), **current}
-json.dump(merged, open(DB, "w", encoding="utf-8"), ensure_ascii=False)
+save_json(DB, merged)
 
 print(f"\nمفحوص: {len(current)} | جديد: {new_count} | رجع للستوك: {restock_count}")
 print("أول تشغيل: تم الحفظ بدون تنبيه" if seen is None else "تمت المقارنة")
