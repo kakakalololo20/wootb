@@ -35,28 +35,28 @@ els => {
 """
 
 def get_products():
-    available = {}
-    all_links = set()
+    """يرجع كل المنتجات (المتوفرة والمنتهية) مع حالتها."""
+    products = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         for n in range(1, MAX_PAGES + 1):
             url = BASE_URL if n == 1 else f"{BASE_URL}?page={n}"
-            page.goto(url, wait_until="networkidle", timeout=60000)
             try:
+                page.goto(url, wait_until="networkidle", timeout=60000)
                 page.wait_for_selector('a[href*="/offers/"]', timeout=10000)
             except Exception:
                 break
             data = page.eval_on_selector_all('a[href*="/offers/"]', JS)
-            new_links = [h for h in data if h not in all_links]
+            new_links = [h for h in data if h not in products]
             if not new_links:
                 break
-            all_links.update(new_links)
-            ok = {h: data[h]["text"] for h in new_links if not data[h]["sold"]}
-            available.update(ok)
-            print(f"صفحة {n}: متوفر {len(ok)} | منتهي {len(new_links) - len(ok)}")
+            for h in new_links:
+                products[h] = {"name": data[h]["text"], "available": not data[h]["sold"]}
+            avail = sum(1 for h in new_links if products[h]["available"])
+            print(f"صفحة {n}: متوفر {avail} | منتهي {len(new_links) - avail}")
         browser.close()
-    return available
+    return products
 
 def notify(text):
     r = requests.post(
@@ -69,9 +69,14 @@ def load_seen():
     if not os.path.exists(DB):
         return None
     try:
-        return json.load(open(DB, encoding="utf-8"))
+        raw = json.load(open(DB, encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+    # تحويل الصيغة القديمة {رابط: اسم} للصيغة الجديدة
+    return {
+        h: (v if isinstance(v, dict) else {"name": v, "available": True})
+        for h, v in raw.items()
+    }
 
 seen = load_seen()
 current = get_products()
@@ -80,12 +85,22 @@ if not current:
     print("ما جاب أي منتج، ممكن الموقع حظر الطلب. ما حفظت شي.")
     sys.exit(1)
 
+new_count = restock_count = 0
 if seen is not None:
-    for link, name in current.items():
-        if link not in seen:
-            notify(f"🆕 {name[:150]}\n{link}")
+    for link, item in current.items():
+        if not item["available"]:
+            continue
+        old = seen.get(link)
+        if old is None:
+            notify(f"🆕 {item['name'][:150]}\n{link}")
+            new_count += 1
+        elif not old["available"]:
+            notify(f"🔄 رجع للستوك: {item['name'][:150]}\n{link}")
+            restock_count += 1
 
-json.dump(current, open(DB, "w", encoding="utf-8"), ensure_ascii=False)
+# ندمج مع القديم عشان لو صفحة فشلت ما نخسر حالة منتجاتها
+merged = {**(seen or {}), **current}
+json.dump(merged, open(DB, "w", encoding="utf-8"), ensure_ascii=False)
 
-print(f"\nتم جلب {len(current)} منتج متوفر")
+print(f"\nمفحوص: {len(current)} | جديد: {new_count} | رجع للستوك: {restock_count}")
 print("أول تشغيل: تم الحفظ بدون تنبيه" if seen is None else "تمت المقارنة")
