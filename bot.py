@@ -264,17 +264,45 @@ def get_products():
     return products
 
 
+# ---------- قراءة سجل البيئة من GitHub ----------
+def read_remote_history(filename):
+    result = git("show", f"origin/main:{filename}", check=False)
+
+    if result.returncode != 0:
+        if "does not exist in 'origin/main'" in result.stderr:
+            return []
+        raise RuntimeError(
+            f"تعذر قراءة سجل GitHub {filename}: {result.stderr}"
+        )
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"ملف السجل {filename} غير صالح: {e}")
+
+    if not isinstance(data, list):
+        raise RuntimeError(f"تنسيق ملف السجل {filename} غير صحيح.")
+
+    return [
+        {
+            "checked_at": item["checked_at"],
+            "channel": item["channel"],
+        }
+        for item in data
+        if isinstance(item, dict)
+        and "checked_at" in item
+        and "channel" in item
+    ]
+
+
 # ---------- نشر النتائج إلى GitHub ----------
-def publish_results(current, checked_at, history):
-    history_dir = ROOT / "check_history" / checked_at[:10]
-    history_dir.mkdir(parents=True, exist_ok=True)
+def publish_results(current, checked_at):
+    history_file = ROOT / f"check_history_{CHANNEL}.json"
 
-    safe_time = checked_at.replace(":", "").replace("+", "_")
-    history_file = history_dir / (
-        f"{CHANNEL}-{safe_time}-{uuid.uuid4().hex[:8]}.json"
-    )
-
-    save_json(history_file, history)
+    history_record = {
+        "checked_at": checked_at,
+        "channel": CHANNEL,
+    }
 
     git("config", "user.name", "Woot Monitor Bot")
     git("config", "user.email", "woot-monitor@users.noreply.github.com")
@@ -287,12 +315,32 @@ def publish_results(current, checked_at, history):
         remote = read_remote_db()
         merged = merge_products(remote, current, checked_at)
 
-        save_json(DB, merged)
+        remote_history = read_remote_history(history_file.name)
 
-        git("add", "seen.json", str(history_file.relative_to(ROOT)))
+        already_recorded = any(
+            item["checked_at"] == checked_at
+            and item["channel"] == CHANNEL
+            for item in remote_history
+        )
+
+        if already_recorded:
+            merged_history = remote_history
+        else:
+            merged_history = [history_record] + remote_history
+
+        save_json(DB, merged)
+        save_json(history_file, merged_history)
+
+        git("add", "seen.json", history_file.name)
 
         if CHANNEL == "github" and STATUS.exists():
             git("add", "status_github.json")
+
+        staged = git("diff", "--cached", "--quiet", check=False)
+
+        if staged.returncode == 0:
+            print("لا توجد تغييرات جديدة للنشر.")
+            return merged
 
         commit = git(
             "commit",
@@ -320,7 +368,6 @@ def publish_results(current, checked_at, history):
         print("تعذر الرفع، سنجلب آخر تحديث ونعيد دمج النتائج.")
         print(pushed.stderr)
 
-        # إعادة الفرع إلى آخر نسخة بعيدة مع إبقاء ملفات العمل.
         git("fetch", "origin", "main")
         git("reset", "--mixed", "origin/main")
 
@@ -393,15 +440,7 @@ def main():
 
     checked_at = timestamp()
 
-    history = {
-        "checked_at": checked_at,
-        "channel": CHANNEL,
-        "products_checked": len(current),
-        "new_products": new_count,
-        "restocked_products": restock_count,
-    }
-
-    publish_results(current, checked_at, history)
+    publish_results(current, checked_at)
 
     print("\n========== ملخص الفحص ==========")
     print("القناة:", CHANNEL)
